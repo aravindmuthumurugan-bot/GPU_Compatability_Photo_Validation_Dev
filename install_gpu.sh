@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# GPU-Optimized Photo Validation - Installation Script (No OCR)
-# For Ubuntu with NVIDIA GPU and CUDA 12.0+
+# GPU-Optimized Photo Validation - FIXED Installation Script
+# Resolves TensorFlow version conflicts
 
 set -e
 
 echo "================================================================"
-echo "GPU-Optimized Photo Validation Installation (NO OCR)"
+echo "GPU-Optimized Photo Validation Installation (FIXED)"
 echo "================================================================"
 echo ""
 
@@ -23,11 +23,6 @@ if ! command -v nvidia-smi &> /dev/null; then
     exit 1
 fi
 
-if ! command -v nvcc &> /dev/null; then
-    echo "WARNING: nvcc not found. CUDA toolkit may not be installed."
-    echo "Continuing anyway..."
-fi
-
 nvidia-smi
 echo ""
 
@@ -39,12 +34,13 @@ echo "Step 3: Installing PyTorch with CUDA 12.1 support..."
 pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121
 echo ""
 
-echo "Step 4: Verifying PyTorch CUDA..."
-python3 -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}')"
+echo "Step 4: Installing TensorFlow 2.16.1 with CUDA support..."
+# Use TensorFlow 2.16.1 which works better with the ecosystem
+pip install tensorflow[and-cuda]==2.16.1
 echo ""
 
-echo "Step 5: Installing TensorFlow with CUDA support..."
-pip install tensorflow[and-cuda]==2.16.1
+echo "Step 5: Installing tf-keras (required for compatibility)..."
+pip install tf-keras==2.16.0
 echo ""
 
 echo "Step 6: Verifying TensorFlow CUDA..."
@@ -65,11 +61,13 @@ echo ""
 
 echo "Step 10: Installing FastAPI and utilities..."
 pip install fastapi==0.115.6 uvicorn[standard]==0.34.0 python-multipart==0.0.20
+echo ""
+
+echo "Step 11: Installing other dependencies..."
 pip install numpy==1.26.4 Pillow==10.2.0 gdown==5.1.0 mtcnn==0.1.1
 echo ""
 
-echo "Step 11: Setting up environment variables..."
-# Check if CUDA paths are in bashrc
+echo "Step 12: Setting up environment variables..."
 if ! grep -q "CUDA" ~/.bashrc; then
     echo "Adding CUDA paths to ~/.bashrc..."
     echo "" >> ~/.bashrc
@@ -81,14 +79,16 @@ if ! grep -q "CUDA" ~/.bashrc; then
 fi
 echo ""
 
-echo "Step 12: Pre-downloading DeepFace models..."
+echo "Step 13: Pre-downloading DeepFace models..."
 python3 -c "from deepface import DeepFace; print('Downloading Facenet512...'); DeepFace.build_model('Facenet512'); print('Downloading Retinaface...'); DeepFace.build_model('Retinaface'); print('Models ready!')"
 echo ""
 
-echo "Step 13: Running GPU verification test..."
+echo "Step 14: Running GPU verification test..."
 cat > /tmp/gpu_test.py << 'EOF'
 import tensorflow as tf
 import torch
+from retinaface import RetinaFace
+from deepface import DeepFace
 
 print("\n" + "="*60)
 print("GPU VERIFICATION")
@@ -113,11 +113,19 @@ if torch.cuda.is_available():
 else:
     print("✗ No GPU detected by PyTorch")
 
+# RetinaFace
+print("\n[RetinaFace]")
+print("✓ RetinaFace imported successfully")
+
+# DeepFace
+print("\n[DeepFace]")
+print("✓ DeepFace imported successfully")
+
 print("\n" + "="*60)
 if len(gpus) > 0 and torch.cuda.is_available():
     print("✓ GPU SETUP SUCCESSFUL!")
 else:
-    print("✗ GPU setup incomplete - check troubleshooting guide")
+    print("✗ GPU setup incomplete")
 print("="*60 + "\n")
 EOF
 
@@ -126,27 +134,28 @@ rm /tmp/gpu_test.py
 echo ""
 
 echo "================================================================"
-echo "Installation Complete! (OCR/PII checks disabled)"
+echo "Installation Complete!"
 echo "================================================================"
 echo ""
 echo "Next steps:"
-echo "1. Replace your stage files with the no-OCR versions:"
-echo "   cp stage_1_response_gpu_no_ocr.py stage_1_response_gpu.py"
-echo "   cp stage_2_response_gpu_no_ocr.py stage_2_response_gpu.py"
 echo ""
-echo "2. Test the validation script:"
-echo "   python stage_1_response_gpu.py Fullface.jpeg"
-echo "   python stage_2_response_gpu.py"
+echo "1. Download a test image:"
+echo "   wget https://raw.githubusercontent.com/serengil/deepface/master/tests/dataset/img1.jpg -O Fullface.jpeg"
 echo ""
-echo "3. Start Stage 1 API:"
+echo "2. Test Stage 1:"
+echo "   python3 stage_1_response_gpu.py Fullface.jpeg PRIMARY"
+echo ""
+echo "3. Test Stage 2:"
+echo "   python3 stage_2_response_gpu.py"
+echo ""
+echo "4. Start Stage 1 API:"
 echo "   uvicorn stage_1_response_api_gpu:app --host 0.0.0.0 --port 8001 --workers 1"
 echo ""
-echo "4. Start Stage 2 API:"
+echo "5. Start Stage 2 API:"
 echo "   uvicorn stage_2_response_api_gpu:app --host 0.0.0.0 --port 8000 --workers 1"
 echo ""
-echo "5. Test the APIs:"
+echo "6. Test the APIs:"
 echo "   curl http://localhost:8001/health"
 echo "   curl http://localhost:8000/health"
 echo ""
-echo "Note: OCR and PII detection have been removed to avoid version conflicts"
 echo "================================================================"

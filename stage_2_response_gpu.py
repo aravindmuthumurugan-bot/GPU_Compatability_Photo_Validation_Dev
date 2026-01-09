@@ -1,8 +1,10 @@
 import cv2
 import os
+import re
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from deepface import DeepFace
+import easyocr
 import tensorflow as tf
 
 # ==================== GPU CONFIGURATION ====================
@@ -70,8 +72,17 @@ DISALLOWED_ETHNICITIES = {
 AGE_VARIANCE_PASS = 8
 AGE_VARIANCE_REVIEW = 15
 
-# Pose angles
+# Pose angles (DeepFace doesn't provide these directly, so we'll use face size/position as proxy)
 MIN_FACE_COVERAGE = 0.15  # Face should cover at least 15% of image
+
+# Text detection
+PII_PATTERNS = {
+    "phone": r'(\+?\d[\d\s\-\(\)]{7,}\d)',
+    "email": r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+',
+    "social_instagram": r'@[a-zA-Z0-9_.]+',
+    "social_twitter": r'@[a-zA-Z0-9_]+',
+    "url": r'(www\.|https?://)[^\s]+',
+}
 
 # Enhancement/filter detection
 FILTER_SATURATION_THRESHOLD = 1.5
@@ -82,6 +93,45 @@ PAPER_WHITE_THRESHOLD = 240
 # Face similarity thresholds for duplicate detection
 DUPLICATE_THRESHOLD_STRICT = 0.40  # DeepFace distance (lower = more similar)
 DUPLICATE_THRESHOLD_REVIEW = 0.50
+
+# Initialize OCR (singleton) with GPU
+_ocr_reader = None
+
+
+def get_ocr_reader():
+    """Get or initialize OCR reader (singleton) with GPU support"""
+    global _ocr_reader
+    if _ocr_reader is None:
+        print("Initializing EasyOCR with GPU support...")
+        _ocr_reader = easyocr.Reader(['en'], gpu=GPU_AVAILABLE)
+        print(f"EasyOCR initialized (GPU: {GPU_AVAILABLE})")
+    return _ocr_reader
+
+
+# ==================== UTILITY FUNCTIONS ====================
+
+def extract_text_from_image(img_path: str) -> List[str]:
+    """Extract text using OCR with GPU"""
+    try:
+        reader = get_ocr_reader()
+        results = reader.readtext(img_path)
+        texts = [text for (bbox, text, prob) in results if prob > 0.5]
+        return texts
+    except Exception as e:
+        print(f"OCR error: {e}")
+        return []
+
+
+def check_for_pii(texts: List[str]) -> Tuple[bool, str]:
+    """Check if extracted text contains PII"""
+    combined_text = ' '.join(texts)
+    
+    for pii_type, pattern in PII_PATTERNS.items():
+        matches = re.findall(pattern, combined_text, re.IGNORECASE)
+        if matches:
+            return True, f"{pii_type} detected: {matches[0]}"
+    
+    return False, None
 
 
 # ==================== DEEPFACE COMPREHENSIVE ANALYSIS ====================
@@ -252,6 +302,42 @@ def check_fraud_database(img_path: str, fraud_db_photos: List[str] = None) -> Di
             "status": "REVIEW",
             "reason": f"Fraud check error: {str(e)}",
             "checked": False
+        }
+
+
+def check_text_and_pii(img_path: str) -> Dict:
+    """Detect PII - CRITICAL CHECK"""
+    try:
+        texts = extract_text_from_image(img_path)
+        
+        if not texts:
+            return {
+                "status": "PASS",
+                "reason": "No text detected",
+                "texts": []
+            }
+        
+        has_pii, pii_details = check_for_pii(texts)
+        
+        if has_pii:
+            return {
+                "status": "FAIL",
+                "reason": f"PII detected: {pii_details}",
+                "texts": texts,
+                "action": "WARN_AND_SELFIE_VERIFY"
+            }
+        
+        return {
+            "status": "REVIEW",
+            "reason": f"Text detected but no PII: {texts[:3]}",
+            "texts": texts
+        }
+        
+    except Exception as e:
+        return {
+            "status": "REVIEW",
+            "reason": f"OCR failed: {str(e)}",
+            "texts": []
         }
 
 
@@ -628,6 +714,31 @@ def detect_ai_generated(img_path: str) -> Dict:
         "confidence": "MEDIUM"
     }
 
+
+def detect_watermark(img_path: str) -> Dict:
+    """Watermark detection"""
+    texts = extract_text_from_image(img_path)
+    
+    watermark_keywords = [
+        "shutterstock", "getty", "watermark", "©", "copyright",
+        "dreamstime", "istockphoto", "alamy", "deposit"
+    ]
+    
+    for text in texts:
+        text_lower = text.lower()
+        for keyword in watermark_keywords:
+            if keyword in text_lower:
+                return {
+                    "status": "FAIL",
+                    "reason": f"Third-party watermark detected: {text}"
+                }
+    
+    return {
+        "status": "PASS",
+        "reason": "No third-party watermarks detected"
+    }
+
+
 # ==================== OPTIMIZED MAIN VALIDATOR WITH EARLY EXIT ====================
 
 def stage2_validate_optimized(
@@ -639,7 +750,16 @@ def stage2_validate_optimized(
 ) -> Dict:
     """
     Stage 2 validation with EARLY EXIT optimization and GPU acceleration.
-    OCR/PII checks removed - focus on face-based validation.
+
+    Priority levels:
+    1. CRITICAL: Age (underage check), Fraud DB, PII
+    2. HIGH: Gender, Ethnicity, Celebrity DB
+    3. STANDARD: Face coverage, Duplicates, Enhancement, Photo-of-photo, AI, Watermark
+
+    Exit behavior:
+    - FAIL status: Exits immediately and stops all further checks
+    - REVIEW status: Continues to all remaining checks to collect comprehensive review reasons
+    - PASS status: Continues to next check
     """
     
     results = {
@@ -670,95 +790,133 @@ def stage2_validate_optimized(
         results["early_exit"] = True
         return results
     
-    # ============= PRIORITY 1: CRITICAL CHECKS =============
+    # ============= PRIORITY 1: CRITICAL CHECKS (EARLY EXIT ON FAIL ONLY) =============
+
+    # 1. AGE CHECK (CRITICAL - Underage detection)
     print("[P1] Checking age...")
     results["checks"]["age"] = validate_age(image_path, profile_data.get("age", 25), face_data)
     results["checks_performed"].append("age")
 
+    # Exit immediately only on FAIL (SUSPEND action), continue on REVIEW
     if results["checks"]["age"]["status"] == "FAIL" and results["checks"]["age"].get("action") == "SUSPEND":
         results["final_decision"] = "SUSPEND"
         results["action"] = "SUSPEND_PROFILE"
         results["reason"] = "Underage detected - immediate suspension"
         results["early_exit"] = True
-        results["checks_skipped"] = ["fraud_db", "gender", "ethnicity", "celebrity_db",
+        results["checks_skipped"] = ["fraud_db", "text_pii", "gender", "ethnicity", "celebrity_db",
                                      "face_coverage", "duplicate", "enhancement", "photo_of_photo",
-                                     "ai_generated"]
+                                     "ai_generated", "watermark"]
         return results
 
+    # 2. FRAUD DATABASE CHECK (CRITICAL)
     print("[P1] Checking fraud database...")
     results["checks"]["fraud_db"] = check_fraud_database(image_path, fraud_db_photos)
     results["checks_performed"].append("fraud_db")
 
+    # Exit immediately only on FAIL
     if results["checks"]["fraud_db"]["status"] == "FAIL":
         results["final_decision"] = "SUSPEND"
         results["action"] = "SUSPEND_PROFILE"
         results["reason"] = "Fraud database match - immediate suspension"
         results["early_exit"] = True
-        results["checks_skipped"] = ["gender", "ethnicity", "celebrity_db",
+        results["checks_skipped"] = ["text_pii", "gender", "ethnicity", "celebrity_db",
                                      "face_coverage", "duplicate", "enhancement", "photo_of_photo",
-                                     "ai_generated"]
+                                     "ai_generated", "watermark"]
         return results
 
-    # ============= PRIORITY 2: HIGH IMPORTANCE CHECKS =============
+    # 3. PII CHECK (CRITICAL)
+    print("[P1] Checking for PII...")
+    results["checks"]["text_pii"] = check_text_and_pii(image_path)
+    results["checks_performed"].append("text_pii")
+
+    # Exit immediately only on FAIL, continue on REVIEW
+    if results["checks"]["text_pii"]["status"] == "FAIL":
+        results["final_decision"] = "REJECT"
+        results["action"] = "WARN_AND_SELFIE_VERIFY"
+        results["reason"] = "PII detected in photo"
+        results["early_exit"] = True
+        results["checks_skipped"] = ["gender", "ethnicity", "celebrity_db", "face_coverage",
+                                     "duplicate", "enhancement", "photo_of_photo", "ai_generated", "watermark"]
+        return results
+
+    # ============= PRIORITY 2: HIGH IMPORTANCE CHECKS (EARLY EXIT ON FAIL ONLY) =============
+
+    # 4. GENDER CHECK
     print("[P2] Checking gender...")
     results["checks"]["gender"] = validate_gender(image_path, profile_data.get("gender", "Unknown"), face_data)
     results["checks_performed"].append("gender")
 
+    # Exit immediately only on FAIL, continue on REVIEW
     if results["checks"]["gender"]["status"] == "FAIL":
         results["final_decision"] = "REJECT"
         results["action"] = "SELFIE_VERIFICATION"
         results["reason"] = "Gender mismatch detected"
         results["early_exit"] = True
         results["checks_skipped"] = ["ethnicity", "celebrity_db", "face_coverage", "duplicate",
-                                     "enhancement", "photo_of_photo", "ai_generated"]
+                                     "enhancement", "photo_of_photo", "ai_generated", "watermark"]
         return results
 
+    # 5. ETHNICITY CHECK
     print("[P2] Checking ethnicity...")
     results["checks"]["ethnicity"] = validate_ethnicity(image_path, face_data)
     results["checks_performed"].append("ethnicity")
 
+    # Exit immediately only on FAIL, continue on REVIEW
     if results["checks"]["ethnicity"]["status"] == "FAIL":
         results["final_decision"] = "REJECT"
         results["action"] = "SELFIE_VERIFICATION"
         results["reason"] = "Ethnicity check failed"
         results["early_exit"] = True
         results["checks_skipped"] = ["celebrity_db", "face_coverage", "duplicate", "enhancement",
-                                     "photo_of_photo", "ai_generated"]
+                                     "photo_of_photo", "ai_generated", "watermark"]
         return results
 
+    # 6. CELEBRITY DATABASE CHECK
     print("[P2] Checking celebrity database...")
     results["checks"]["celebrity_db"] = check_celebrity_database(image_path, celebrity_db_photos)
     results["checks_performed"].append("celebrity_db")
 
+    # Exit immediately only on FAIL, continue on REVIEW
     if results["checks"]["celebrity_db"]["status"] == "FAIL":
         results["final_decision"] = "REJECT"
         results["action"] = "SELFIE_VERIFICATION"
         results["reason"] = "Celebrity photo detected"
         results["early_exit"] = True
         results["checks_skipped"] = ["face_coverage", "duplicate", "enhancement", "photo_of_photo",
-                                     "ai_generated"]
+                                     "ai_generated", "watermark"]
         return results
     
-    # ============= PRIORITY 3: STANDARD CHECKS =============
+    # ============= PRIORITY 3: STANDARD CHECKS (CONTINUE ALL) =============
+    # These checks run to completion for comprehensive reporting
+    
     print("[P3] Running standard checks...")
     
+    # 7. Face Coverage
     results["checks"]["face_coverage"] = check_face_coverage(image_path, face_data)
     results["checks_performed"].append("face_coverage")
     
+    # 8. Duplicate Detection
     results["checks"]["duplicate"] = check_duplicate(image_path, existing_photos)
     results["checks_performed"].append("duplicate")
     
+    # 9. Digital Enhancement
     results["checks"]["enhancement"] = detect_digital_enhancement(image_path)
     results["checks_performed"].append("enhancement")
     
+    # 10. Photo-of-photo
     results["checks"]["photo_of_photo"] = detect_photo_of_photo(image_path)
     results["checks_performed"].append("photo_of_photo")
     
+    # 11. AI-generated
     results["checks"]["ai_generated"] = detect_ai_generated(image_path)
     results["checks_performed"].append("ai_generated")
     
+    # 12. Watermark
+    results["checks"]["watermark"] = detect_watermark(image_path)
+    results["checks_performed"].append("watermark")
     
     # ============= FINAL DECISION LOGIC =============
+    
     fail_checks = []
     review_checks = []
     
@@ -797,6 +955,9 @@ def determine_rejection_action(fail_checks: List[str], all_checks: Dict) -> str:
     if any(check in fail_checks for check in ["age", "fraud_db"]):
         return "SUSPEND_PROFILE"
     
+    if "text_pii" in fail_checks:
+        return "WARN_AND_SELFIE_VERIFY"
+    
     if any(check in fail_checks for check in ["celebrity_db", "gender", "ethnicity"]):
         return "SELFIE_VERIFICATION"
     
@@ -829,7 +990,7 @@ if __name__ == "__main__":
     )
     
     print("\n" + "="*60)
-    print(f"STAGE 2 VALIDATION (GPU - NO OCR) - Matri ID: {result['matri_id']}")
+    print(f"STAGE 2 VALIDATION (GPU OPTIMIZED) - Matri ID: {result['matri_id']}")
     print("="*60)
     print(f"\nGPU USED: {result['gpu_used']}")
     print(f"EARLY EXIT: {result['early_exit']}")

@@ -251,7 +251,7 @@ if __name__ == "__main__":
     configure_gpu()
     
     uvicorn.run(
-        "stage_1_api_gpu:app",
+        "stage_1_response_api_gpu:app",
         host="0.0.0.0",
         port=8001,  # Different port from Stage 2
         workers=1   # Single worker for GPU

@@ -42,8 +42,8 @@ def convert_to_native_types(obj):
 def process_single_image(image_path: str, photo_type: str, person_id: str, filename: str):
     """Process a single image with GPU acceleration"""
     try:
-        # Configure GPU for this worker
-        configure_gpu()
+        # GPU is already configured at module load in stage_1_response_gpu
+        # No need to configure again here
         
         result = stage1_validate(
             image_path=image_path,

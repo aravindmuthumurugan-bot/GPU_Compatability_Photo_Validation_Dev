@@ -1,9 +1,14 @@
+"""
+Stage 2 Response GPU - CLEANED VERSION (No OCR/PII)
+Removed OCR and PII detection to avoid version conflicts
+"""
+
 import cv2
 import os
-import re
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from deepface import DeepFace
+from retinaface import RetinaFace
 import tensorflow as tf
 
 # ==================== GPU CONFIGURATION ====================
@@ -71,17 +76,8 @@ DISALLOWED_ETHNICITIES = {
 AGE_VARIANCE_PASS = 8
 AGE_VARIANCE_REVIEW = 15
 
-# Pose angles (DeepFace doesn't provide these directly, so we'll use face size/position as proxy)
+# Pose angles
 MIN_FACE_COVERAGE = 0.15  # Face should cover at least 15% of image
-
-# Text detection
-PII_PATTERNS = {
-    "phone": r'(\+?\d[\d\s\-\(\)]{7,}\d)',
-    "email": r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+',
-    "social_instagram": r'@[a-zA-Z0-9_.]+',
-    "social_twitter": r'@[a-zA-Z0-9_]+',
-    "url": r'(www\.|https?://)[^\s]+',
-}
 
 # Enhancement/filter detection
 FILTER_SATURATION_THRESHOLD = 1.5
@@ -262,42 +258,6 @@ def check_fraud_database(img_path: str, fraud_db_photos: List[str] = None) -> Di
             "status": "REVIEW",
             "reason": f"Fraud check error: {str(e)}",
             "checked": False
-        }
-
-
-def check_text_and_pii(img_path: str) -> Dict:
-    """Detect PII - CRITICAL CHECK"""
-    try:
-        texts = extract_text_from_image(img_path)
-        
-        if not texts:
-            return {
-                "status": "PASS",
-                "reason": "No text detected",
-                "texts": []
-            }
-        
-        has_pii, pii_details = check_for_pii(texts)
-        
-        if has_pii:
-            return {
-                "status": "FAIL",
-                "reason": f"PII detected: {pii_details}",
-                "texts": texts,
-                "action": "WARN_AND_SELFIE_VERIFY"
-            }
-        
-        return {
-            "status": "REVIEW",
-            "reason": f"Text detected but no PII: {texts[:3]}",
-            "texts": texts
-        }
-        
-    except Exception as e:
-        return {
-            "status": "REVIEW",
-            "reason": f"OCR failed: {str(e)}",
-            "texts": []
         }
 
 
@@ -685,7 +645,7 @@ def stage2_validate_optimized(
 ) -> Dict:
     """
     Stage 2 validation with EARLY EXIT optimization and GPU acceleration.
-    Now using PaddleOCR instead of EasyOCR for better compatibility.
+    OCR/PII checks removed due to version conflicts.
     """
     
     results = {
@@ -726,9 +686,9 @@ def stage2_validate_optimized(
         results["action"] = "SUSPEND_PROFILE"
         results["reason"] = "Underage detected - immediate suspension"
         results["early_exit"] = True
-        results["checks_skipped"] = ["fraud_db", "text_pii", "gender", "ethnicity", "celebrity_db",
+        results["checks_skipped"] = ["fraud_db", "gender", "ethnicity", "celebrity_db",
                                      "face_coverage", "duplicate", "enhancement", "photo_of_photo",
-                                     "ai_generated", "watermark"]
+                                     "ai_generated"]
         return results
 
     print("[P1] Checking fraud database...")
@@ -740,11 +700,12 @@ def stage2_validate_optimized(
         results["action"] = "SUSPEND_PROFILE"
         results["reason"] = "Fraud database match - immediate suspension"
         results["early_exit"] = True
-        results["checks_skipped"] = ["text_pii", "gender", "ethnicity", "celebrity_db",
+        results["checks_skipped"] = ["gender", "ethnicity", "celebrity_db",
                                      "face_coverage", "duplicate", "enhancement", "photo_of_photo",
-                                     "ai_generated", "watermark"]
+                                     "ai_generated"]
         return results
 
+    # OCR/PII check removed due to version conflicts
     
     # ============= PRIORITY 2: HIGH IMPORTANCE CHECKS =============
     print("[P2] Checking gender...")
@@ -757,7 +718,7 @@ def stage2_validate_optimized(
         results["reason"] = "Gender mismatch detected"
         results["early_exit"] = True
         results["checks_skipped"] = ["ethnicity", "celebrity_db", "face_coverage", "duplicate",
-                                     "enhancement", "photo_of_photo", "ai_generated", "watermark"]
+                                     "enhancement", "photo_of_photo", "ai_generated"]
         return results
 
     print("[P2] Checking ethnicity...")
@@ -770,7 +731,7 @@ def stage2_validate_optimized(
         results["reason"] = "Ethnicity check failed"
         results["early_exit"] = True
         results["checks_skipped"] = ["celebrity_db", "face_coverage", "duplicate", "enhancement",
-                                     "photo_of_photo", "ai_generated", "watermark"]
+                                     "photo_of_photo", "ai_generated"]
         return results
 
     print("[P2] Checking celebrity database...")
@@ -783,7 +744,7 @@ def stage2_validate_optimized(
         results["reason"] = "Celebrity photo detected"
         results["early_exit"] = True
         results["checks_skipped"] = ["face_coverage", "duplicate", "enhancement", "photo_of_photo",
-                                     "ai_generated", "watermark"]
+                                     "ai_generated"]
         return results
     
     # ============= PRIORITY 3: STANDARD CHECKS =============
@@ -844,9 +805,6 @@ def determine_rejection_action(fail_checks: List[str], all_checks: Dict) -> str:
     if any(check in fail_checks for check in ["age", "fraud_db"]):
         return "SUSPEND_PROFILE"
     
-    if "text_pii" in fail_checks:
-        return "WARN_AND_SELFIE_VERIFY"
-    
     if any(check in fail_checks for check in ["celebrity_db", "gender", "ethnicity"]):
         return "SELFIE_VERIFICATION"
     
@@ -879,10 +837,9 @@ if __name__ == "__main__":
     )
     
     print("\n" + "="*60)
-    print(f"STAGE 2 VALIDATION (GPU + PaddleOCR) - Matri ID: {result['matri_id']}")
+    print(f"STAGE 2 VALIDATION (GPU - NO OCR) - Matri ID: {result['matri_id']}")
     print("="*60)
     print(f"\nGPU USED: {result['gpu_used']}")
-    print(f"OCR ENGINE: {result['ocr_engine']}")
     print(f"EARLY EXIT: {result['early_exit']}")
     print(f"CHECKS PERFORMED: {result['checks_performed']}")
     if result['checks_skipped']:

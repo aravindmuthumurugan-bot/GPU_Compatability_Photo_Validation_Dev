@@ -1,10 +1,16 @@
+"""
+Stage 1 Response GPU - CLEANED VERSION
+Fixed imports and removed OCR dependencies
+"""
+
 import cv2
 import os
 import numpy as np
 import tensorflow as tf
 from typing import Dict, List, Tuple
 
-# Use RetinaFace from DeepFace (shared with Stage 2)
+# Use RetinaFace from retinaface library
+from retinaface import RetinaFace
 from deepface import DeepFace
 from nudenet import NudeDetector
 
@@ -76,7 +82,8 @@ def reject(reason, checks):
         "stage": 1,
         "result": "REJECT",
         "reason": reason,
-        "checks": checks
+        "checks": checks,
+        "gpu_used": GPU_AVAILABLE
     }
 
 def pass_stage(checks):
@@ -84,7 +91,8 @@ def pass_stage(checks):
         "stage": 1,
         "result": "PASS",
         "reason": None,
-        "checks": checks
+        "checks": checks,
+        "gpu_used": GPU_AVAILABLE
     }
 
 def is_supported_format(image_path):
@@ -259,7 +267,7 @@ def stage1_validate_batch(
     
     print(f"\n{'='*60}")
     print(f"BATCH VALIDATION: {len(image_paths)} images")
-    print(f"Using: DeepFace RetinaFace (GPU: {GPU_AVAILABLE})")
+    print(f"Using: RetinaFace (GPU: {GPU_AVAILABLE})")
     print(f"{'='*60}\n")
     
     for idx, (img_path, photo_type) in enumerate(zip(image_paths, photo_types)):

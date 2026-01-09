@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# GPU-Optimized Photo Validation - Quick Installation Script
+# GPU-Optimized Photo Validation - Installation Script (No OCR)
 # For Ubuntu with NVIDIA GPU and CUDA 12.0+
 
 set -e
 
 echo "================================================================"
-echo "GPU-Optimized Photo Validation Installation"
+echo "GPU-Optimized Photo Validation Installation (NO OCR)"
 echo "================================================================"
 echo ""
 
@@ -55,6 +55,9 @@ echo "Step 7: Installing DeepFace and dependencies..."
 pip install deepface==0.0.93 retina-face==0.0.17
 echo ""
 
+echo "Step 8: Installing NudeNet..."
+pip install nudenet==3.4.2
+echo ""
 
 echo "Step 9: Installing OpenCV..."
 pip install opencv-python==4.9.0.80 opencv-contrib-python==4.9.0.80
@@ -123,21 +126,27 @@ rm /tmp/gpu_test.py
 echo ""
 
 echo "================================================================"
-echo "Installation Complete!"
+echo "Installation Complete! (OCR/PII checks disabled)"
 echo "================================================================"
 echo ""
 echo "Next steps:"
-echo "1. Test the validation script:"
+echo "1. Replace your stage files with the no-OCR versions:"
+echo "   cp stage_1_response_gpu_no_ocr.py stage_1_response_gpu.py"
+echo "   cp stage_2_response_gpu_no_ocr.py stage_2_response_gpu.py"
+echo ""
+echo "2. Test the validation script:"
+echo "   python stage_1_response_gpu.py Fullface.jpeg"
 echo "   python stage_2_response_gpu.py"
 echo ""
-echo "2. Start the API server:"
-echo "   python stage_2_response_api_gpu.py"
+echo "3. Start Stage 1 API:"
+echo "   uvicorn stage_1_response_api_gpu:app --host 0.0.0.0 --port 8001 --workers 1"
 echo ""
-echo "3. Or with uvicorn:"
+echo "4. Start Stage 2 API:"
 echo "   uvicorn stage_2_response_api_gpu:app --host 0.0.0.0 --port 8000 --workers 1"
 echo ""
-echo "4. Test the API:"
+echo "5. Test the APIs:"
+echo "   curl http://localhost:8001/health"
 echo "   curl http://localhost:8000/health"
 echo ""
-echo "For troubleshooting, see README_GPU_SETUP.md"
+echo "Note: OCR and PII detection have been removed to avoid version conflicts"
 echo "================================================================"

@@ -1,14 +1,8 @@
-"""
-Stage 2 Response GPU - CLEANED VERSION (No OCR/PII)
-Removed OCR and PII detection to avoid version conflicts
-"""
-
 import cv2
 import os
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from deepface import DeepFace
-from retinaface import RetinaFace
 import tensorflow as tf
 
 # ==================== GPU CONFIGURATION ====================
@@ -645,7 +639,7 @@ def stage2_validate_optimized(
 ) -> Dict:
     """
     Stage 2 validation with EARLY EXIT optimization and GPU acceleration.
-    OCR/PII checks removed due to version conflicts.
+    OCR/PII checks removed - focus on face-based validation.
     """
     
     results = {
@@ -705,8 +699,6 @@ def stage2_validate_optimized(
                                      "ai_generated"]
         return results
 
-    # OCR/PII check removed due to version conflicts
-    
     # ============= PRIORITY 2: HIGH IMPORTANCE CHECKS =============
     print("[P2] Checking gender...")
     results["checks"]["gender"] = validate_gender(image_path, profile_data.get("gender", "Unknown"), face_data)

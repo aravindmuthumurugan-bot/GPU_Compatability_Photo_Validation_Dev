@@ -12,30 +12,37 @@ from nudenet import NudeDetector
 # ==================== GPU CONFIGURATION ====================
 
 def configure_gpu():
-    """Configure TensorFlow GPU for Stage 1"""
+    """Configure TensorFlow to use GPU efficiently"""
     print("="*60)
-    print("STAGE 1 - GPU CONFIGURATION")
+    print("GPU CONFIGURATION")
     print("="*60)
     
+    # Check GPU availability
     gpus = tf.config.list_physical_devices('GPU')
     print(f"TensorFlow version: {tf.__version__}")
     print(f"GPUs Available: {len(gpus)}")
     
     if gpus:
         try:
+            # Enable memory growth to prevent TensorFlow from allocating all GPU memory
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
             
+            # Set visible devices
             tf.config.set_visible_devices(gpus[0], 'GPU')
             
+            # Get GPU details
             gpu_details = tf.config.experimental.get_device_details(gpus[0])
             print(f"GPU Device: {gpus[0]}")
             print(f"GPU Name: {gpu_details.get('device_name', 'Unknown')}")
-            print(f"CUDA Available: {tf.test.is_built_with_cuda()}")
             
-            # Use float32 for better compatibility
-            tf.keras.mixed_precision.set_global_policy('float32')
-            print("Mixed precision: float32")
+            # Check CUDA and cuDNN
+            print(f"CUDA Available: {tf.test.is_built_with_cuda()}")
+            print(f"GPU is being used: {tf.test.is_gpu_available(cuda_only=True)}")
+            
+            # Set mixed precision for better performance
+            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            print("Mixed precision enabled (float16)")
             
         except RuntimeError as e:
             print(f"GPU configuration error: {e}")
@@ -50,7 +57,6 @@ GPU_AVAILABLE = configure_gpu()
 
 
 # ==================== CONFIGURATION ====================
-
 MIN_RESOLUTION = 360          # SOP minimum
 MIN_FACE_SIZE = 120           # px
 BLUR_REJECT = 35              # Laplacian variance threshold
@@ -59,69 +65,54 @@ SUPPORTED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"
 }
 
-# NudeNet detector (GPU-accelerated if available)
-print("Loading NudeNet detector...")
+# NudeNet detector (loaded once)
 nsfw_detector = NudeDetector()
-print(f"✓ NudeNet loaded (GPU: {GPU_AVAILABLE})\n")
 
 
-# ==================== UTILITY FUNCTIONS ====================
+# UTILITY FUNCTIONS
 
-def reject(reason: str, checks: Dict) -> Dict:
+def reject(reason, checks):
     return {
         "stage": 1,
         "result": "REJECT",
         "reason": reason,
-        "checks": checks,
-        "gpu_used": GPU_AVAILABLE
+        "checks": checks
     }
 
-
-def pass_stage(checks: Dict) -> Dict:
+def pass_stage(checks):
     return {
         "stage": 1,
         "result": "PASS",
         "reason": None,
-        "checks": checks,
-        "gpu_used": GPU_AVAILABLE
+        "checks": checks
     }
 
-
-def is_supported_format(image_path: str) -> bool:
+def is_supported_format(image_path):
     ext = os.path.splitext(image_path.lower())[1]
     return ext in SUPPORTED_EXTENSIONS
 
-
-def is_resolution_ok(img: np.ndarray) -> bool:
+def is_resolution_ok(img):
     h, w = img.shape[:2]
     return min(h, w) >= MIN_RESOLUTION
 
-
-def blur_score(img: np.ndarray) -> float:
-    """Calculate blur score using Laplacian variance"""
+def blur_score(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-
-def is_orientation_ok(landmarks: Dict) -> bool:
+def is_orientation_ok(landmarks):
     """
-    Fast orientation sanity check:
+    Fast orientation sanity:
     Eyes must be above nose
     """
-    try:
-        le_y = landmarks.get("left_eye", [0, 0])[1] if isinstance(landmarks.get("left_eye"), (list, tuple)) else landmarks.get("left_eye", {}).get('y', 0)
-        re_y = landmarks.get("right_eye", [0, 0])[1] if isinstance(landmarks.get("right_eye"), (list, tuple)) else landmarks.get("right_eye", {}).get('y', 0)
-        nose_y = landmarks.get("nose", [0, 0])[1] if isinstance(landmarks.get("nose"), (list, tuple)) else landmarks.get("nose", {}).get('y', 0)
+    le_y = landmarks["left_eye"][1] 
+    re_y = landmarks["right_eye"][1]
+    nose_y = landmarks["nose"][1]
 
-        if le_y > nose_y or re_y > nose_y:
-            return False
-        return True
-    except:
-        # If landmarks format is unexpected, pass this check
-        return True
+    if le_y > nose_y or re_y > nose_y:
+        return False
+    return True
 
-
-def is_face_covered(landmarks: Dict) -> bool:
+def is_face_covered(landmarks):
     """
     If mouth landmarks missing → likely mask / full cover
     """
@@ -131,79 +122,15 @@ def is_face_covered(landmarks: Dict) -> bool:
     )
 
 
-# ==================== GPU-ACCELERATED FACE DETECTION ====================
+# NSFW / BARE BODY (STAGE-1)
 
-def detect_faces_retinaface_deepface(image_path: str) -> Tuple[Dict, str]:
+def check_nsfw_stage1(image_path):
     """
-    GPU-accelerated face detection using DeepFace's RetinaFace
-    This uses the SAME RetinaFace model that Stage 2 uses!
-    
-    Returns: (faces_dict, error_message)
-    Format matches original retinaface package output
-    """
-    try:
-        # Use DeepFace.extract_faces to get face detections
-        faces_list = DeepFace.extract_faces(
-            img_path=image_path,
-            detector_backend='retinaface',
-            enforce_detection=False,  # More lenient than your original
-            align=False
-        )
-        
-        if not faces_list or len(faces_list) == 0:
-            return {}, "No face detected"
-        
-        # Convert DeepFace format to original RetinaFace format
-        # DeepFace returns: [{'face': array, 'facial_area': {x, y, w, h}, 'confidence': float}]
-        # Original RetinaFace returns: {'face_1': {'facial_area': [x1,y1,x2,y2], 'landmarks': {...}}}
-        
-        faces_dict = {}
-        
-        for idx, face_data in enumerate(faces_list):
-            # Skip low confidence detections
-            if face_data.get('confidence', 0) < 0.7:
-                continue
-            
-            facial_area = face_data.get('facial_area', {})
-            
-            # Convert DeepFace format (x, y, w, h) to original format (x1, y1, x2, y2)
-            x = facial_area.get('x', 0)
-            y = facial_area.get('y', 0)
-            w = facial_area.get('w', 0)
-            h = facial_area.get('h', 0)
-            
-            face_key = f"face_{idx + 1}"
-            faces_dict[face_key] = {
-                'facial_area': [x, y, x + w, y + h],
-                'score': face_data.get('confidence', 0.9),
-                # Approximate landmarks (DeepFace doesn't return them in extract_faces)
-                # For Stage 1, we'll use estimated positions
-                'landmarks': {
-                    'left_eye': [x + w * 0.3, y + h * 0.4],
-                    'right_eye': [x + w * 0.7, y + h * 0.4],
-                    'nose': [x + w * 0.5, y + h * 0.6],
-                    'mouth_left': [x + w * 0.35, y + h * 0.8],
-                    'mouth_right': [x + w * 0.65, y + h * 0.8]
-                }
-            }
-        
-        if not faces_dict:
-            return {}, "No face detected with sufficient confidence"
-        
-        return faces_dict, None
-        
-    except Exception as e:
-        return {}, f"Face detection error: {str(e)}"
-
-
-# ==================== GPU-ACCELERATED NSFW DETECTION ====================
-
-def check_nsfw_stage1(image_path: str) -> Tuple[bool, str]:
-    """
-    Stage-1 NSFW policy with GPU acceleration:
+    Stage-1 NSFW policy:
     - ANY nudity / bare body → REJECT
     - No suspend here (per requirement)
     """
+
     disallowed_classes = {
         # Explicit nudity
         "FEMALE_GENITALIA_EXPOSED",
@@ -221,31 +148,21 @@ def check_nsfw_stage1(image_path: str) -> Tuple[bool, str]:
         "SWIMWEAR"
     }
 
-    try:
-        # NudeNet runs on GPU if available
-        detections = nsfw_detector.detect(image_path)
+    detections = nsfw_detector.detect(image_path)
 
-        for d in detections:
-            if d["class"] in disallowed_classes and d["score"] > 0.6:
-                return False, f"Disallowed content detected ({d['class']})"
+    for d in detections:
+        if d["class"] in disallowed_classes and d["score"] > 0.6:
+            return False, f"Disallowed content detected ({d['class']})"
 
-        return True, None
-        
-    except Exception as e:
-        # If NSFW check fails, log error but don't reject
-        print(f"NSFW check error: {e}")
-        return True, None
+    return True, None
 
+# STAGE-1 MAIN VALIDATOR
 
-# ==================== STAGE-1 MAIN VALIDATOR (GPU OPTIMIZED) ====================
-
-def stage1_validate(image_path: str, photo_type: str = "PRIMARY") -> Dict:
+def stage1_validate(image_path, photo_type="PRIMARY"):
     """
-    GPU-optimized Stage-1 validation
-    Uses DeepFace's RetinaFace (shared with Stage 2)
-    
     photo_type: PRIMARY | SECONDARY
     """
+
     checks = {}
 
     # ---------------- IMAGE READ ----------------
@@ -264,11 +181,10 @@ def stage1_validate(image_path: str, photo_type: str = "PRIMARY") -> Dict:
         return reject("Low resolution image", checks)
     checks["resolution"] = "PASS"
 
-    # ---------------- FACE DETECTION (GPU - using DeepFace RetinaFace) ----------------
-    faces, error = detect_faces_retinaface_deepface(image_path)
-    
-    if error or not faces:
-        return reject(error or "No face detected", checks)
+    # ---------------- FACE DETECTION ----------------
+    faces = RetinaFace.detect_faces(image_path)
+    if not faces:
+        return reject("No face detected", checks)
 
     if photo_type == "PRIMARY" and len(faces) > 1:
         return reject("Group photo not allowed as primary photo", checks)
@@ -307,7 +223,7 @@ def stage1_validate(image_path: str, photo_type: str = "PRIMARY") -> Dict:
 
     checks["face_cover"] = "PASS"
 
-    # ---------------- NSFW / BARE BODY (GPU) ----------------
+    # ---------------- NSFW / BARE BODY ----------------
     nsfw_ok, nsfw_reason = check_nsfw_stage1(image_path)
     if not nsfw_ok:
         return reject(nsfw_reason, checks)
@@ -316,7 +232,6 @@ def stage1_validate(image_path: str, photo_type: str = "PRIMARY") -> Dict:
 
     # ---------------- FINAL ----------------
     return pass_stage(checks)
-
 
 # ==================== BATCH PROCESSING (GPU OPTIMIZED) ====================
 

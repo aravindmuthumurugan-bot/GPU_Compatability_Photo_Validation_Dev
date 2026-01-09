@@ -55,9 +55,6 @@ echo "Step 7: Installing DeepFace and dependencies..."
 pip install deepface==0.0.93 retina-face==0.0.17
 echo ""
 
-echo "Step 8: Installing EasyOCR..."
-pip install easyocr==1.7.1
-echo ""
 
 echo "Step 9: Installing OpenCV..."
 pip install opencv-python==4.9.0.80 opencv-contrib-python==4.9.0.80

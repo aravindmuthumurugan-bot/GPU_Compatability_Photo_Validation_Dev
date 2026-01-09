@@ -93,68 +93,6 @@ PAPER_WHITE_THRESHOLD = 240
 DUPLICATE_THRESHOLD_STRICT = 0.40  # DeepFace distance (lower = more similar)
 DUPLICATE_THRESHOLD_REVIEW = 0.50
 
-# Initialize PaddleOCR (singleton) with GPU
-_ocr_reader = None
-
-
-def get_ocr_reader():
-    """Get or initialize PaddleOCR reader (singleton) with GPU support"""
-    global _ocr_reader
-    if _ocr_reader is None:
-        try:
-            from paddleocr import PaddleOCR
-            print("Initializing PaddleOCR with GPU support...")
-            _ocr_reader = PaddleOCR(
-                use_angle_cls=True,
-                lang='en',
-                use_gpu=GPU_AVAILABLE,
-                show_log=False
-            )
-            print(f"PaddleOCR initialized (GPU: {GPU_AVAILABLE})")
-        except Exception as e:
-            print(f"PaddleOCR initialization error: {e}")
-            print("OCR will be disabled")
-            _ocr_reader = None
-    return _ocr_reader
-
-
-# ==================== UTILITY FUNCTIONS ====================
-
-def extract_text_from_image(img_path: str) -> List[str]:
-    """Extract text using PaddleOCR with GPU"""
-    try:
-        reader = get_ocr_reader()
-        if reader is None:
-            return []
-        
-        result = reader.ocr(img_path, cls=True)
-        
-        # PaddleOCR returns: [[[box], (text, confidence)], ...]
-        texts = []
-        if result and result[0]:
-            for line in result[0]:
-                if len(line) >= 2:
-                    text, conf = line[1]
-                    if conf > 0.5:  # Confidence threshold
-                        texts.append(text)
-        
-        return texts
-    except Exception as e:
-        print(f"OCR error: {e}")
-        return []
-
-
-def check_for_pii(texts: List[str]) -> Tuple[bool, str]:
-    """Check if extracted text contains PII"""
-    combined_text = ' '.join(texts)
-    
-    for pii_type, pattern in PII_PATTERNS.items():
-        matches = re.findall(pattern, combined_text, re.IGNORECASE)
-        if matches:
-            return True, f"{pii_type} detected: {matches[0]}"
-    
-    return False, None
-
 
 # ==================== DEEPFACE COMPREHENSIVE ANALYSIS ====================
 
@@ -736,31 +674,6 @@ def detect_ai_generated(img_path: str) -> Dict:
         "confidence": "MEDIUM"
     }
 
-
-def detect_watermark(img_path: str) -> Dict:
-    """Watermark detection"""
-    texts = extract_text_from_image(img_path)
-    
-    watermark_keywords = [
-        "shutterstock", "getty", "watermark", "©", "copyright",
-        "dreamstime", "istockphoto", "alamy", "deposit"
-    ]
-    
-    for text in texts:
-        text_lower = text.lower()
-        for keyword in watermark_keywords:
-            if keyword in text_lower:
-                return {
-                    "status": "FAIL",
-                    "reason": f"Third-party watermark detected: {text}"
-                }
-    
-    return {
-        "status": "PASS",
-        "reason": "No third-party watermarks detected"
-    }
-
-
 # ==================== OPTIMIZED MAIN VALIDATOR WITH EARLY EXIT ====================
 
 def stage2_validate_optimized(
@@ -779,7 +692,6 @@ def stage2_validate_optimized(
         "stage": 2,
         "matri_id": profile_data.get("matri_id"),
         "gpu_used": GPU_AVAILABLE,
-        "ocr_engine": "PaddleOCR",
         "checks": {},
         "checks_performed": [],
         "checks_skipped": [],
@@ -833,19 +745,7 @@ def stage2_validate_optimized(
                                      "ai_generated", "watermark"]
         return results
 
-    print("[P1] Checking for PII...")
-    results["checks"]["text_pii"] = check_text_and_pii(image_path)
-    results["checks_performed"].append("text_pii")
-
-    if results["checks"]["text_pii"]["status"] == "FAIL":
-        results["final_decision"] = "REJECT"
-        results["action"] = "WARN_AND_SELFIE_VERIFY"
-        results["reason"] = "PII detected in photo"
-        results["early_exit"] = True
-        results["checks_skipped"] = ["gender", "ethnicity", "celebrity_db", "face_coverage",
-                                     "duplicate", "enhancement", "photo_of_photo", "ai_generated", "watermark"]
-        return results
-
+    
     # ============= PRIORITY 2: HIGH IMPORTANCE CHECKS =============
     print("[P2] Checking gender...")
     results["checks"]["gender"] = validate_gender(image_path, profile_data.get("gender", "Unknown"), face_data)
@@ -904,8 +804,6 @@ def stage2_validate_optimized(
     results["checks"]["ai_generated"] = detect_ai_generated(image_path)
     results["checks_performed"].append("ai_generated")
     
-    results["checks"]["watermark"] = detect_watermark(image_path)
-    results["checks_performed"].append("watermark")
     
     # ============= FINAL DECISION LOGIC =============
     fail_checks = []

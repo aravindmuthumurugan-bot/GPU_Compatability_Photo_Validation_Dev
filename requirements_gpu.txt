@@ -7,7 +7,6 @@ deepface==0.0.93
 retina-face==0.0.17
 
 # OCR with GPU support
-easyocr==1.7.1
 torch==2.2.0+cu121
 torchvision==0.17.0+cu121
 

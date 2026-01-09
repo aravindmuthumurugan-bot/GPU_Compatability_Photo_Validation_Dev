@@ -4,7 +4,6 @@ import re
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from deepface import DeepFace
-import easyocr
 import tensorflow as tf
 
 # ==================== GPU CONFIGURATION ====================
@@ -94,44 +93,6 @@ PAPER_WHITE_THRESHOLD = 240
 DUPLICATE_THRESHOLD_STRICT = 0.40  # DeepFace distance (lower = more similar)
 DUPLICATE_THRESHOLD_REVIEW = 0.50
 
-# Initialize OCR (singleton) with GPU
-_ocr_reader = None
-
-
-def get_ocr_reader():
-    """Get or initialize OCR reader (singleton) with GPU support"""
-    global _ocr_reader
-    if _ocr_reader is None:
-        print("Initializing EasyOCR with GPU support...")
-        _ocr_reader = easyocr.Reader(['en'], gpu=GPU_AVAILABLE)
-        print(f"EasyOCR initialized (GPU: {GPU_AVAILABLE})")
-    return _ocr_reader
-
-
-# ==================== UTILITY FUNCTIONS ====================
-
-def extract_text_from_image(img_path: str) -> List[str]:
-    """Extract text using OCR with GPU"""
-    try:
-        reader = get_ocr_reader()
-        results = reader.readtext(img_path)
-        texts = [text for (bbox, text, prob) in results if prob > 0.5]
-        return texts
-    except Exception as e:
-        print(f"OCR error: {e}")
-        return []
-
-
-def check_for_pii(texts: List[str]) -> Tuple[bool, str]:
-    """Check if extracted text contains PII"""
-    combined_text = ' '.join(texts)
-    
-    for pii_type, pattern in PII_PATTERNS.items():
-        matches = re.findall(pattern, combined_text, re.IGNORECASE)
-        if matches:
-            return True, f"{pii_type} detected: {matches[0]}"
-    
-    return False, None
 
 
 # ==================== DEEPFACE COMPREHENSIVE ANALYSIS ====================
@@ -302,42 +263,6 @@ def check_fraud_database(img_path: str, fraud_db_photos: List[str] = None) -> Di
             "status": "REVIEW",
             "reason": f"Fraud check error: {str(e)}",
             "checked": False
-        }
-
-
-def check_text_and_pii(img_path: str) -> Dict:
-    """Detect PII - CRITICAL CHECK"""
-    try:
-        texts = extract_text_from_image(img_path)
-        
-        if not texts:
-            return {
-                "status": "PASS",
-                "reason": "No text detected",
-                "texts": []
-            }
-        
-        has_pii, pii_details = check_for_pii(texts)
-        
-        if has_pii:
-            return {
-                "status": "FAIL",
-                "reason": f"PII detected: {pii_details}",
-                "texts": texts,
-                "action": "WARN_AND_SELFIE_VERIFY"
-            }
-        
-        return {
-            "status": "REVIEW",
-            "reason": f"Text detected but no PII: {texts[:3]}",
-            "texts": texts
-        }
-        
-    except Exception as e:
-        return {
-            "status": "REVIEW",
-            "reason": f"OCR failed: {str(e)}",
-            "texts": []
         }
 
 
@@ -715,28 +640,6 @@ def detect_ai_generated(img_path: str) -> Dict:
     }
 
 
-def detect_watermark(img_path: str) -> Dict:
-    """Watermark detection"""
-    texts = extract_text_from_image(img_path)
-    
-    watermark_keywords = [
-        "shutterstock", "getty", "watermark", "©", "copyright",
-        "dreamstime", "istockphoto", "alamy", "deposit"
-    ]
-    
-    for text in texts:
-        text_lower = text.lower()
-        for keyword in watermark_keywords:
-            if keyword in text_lower:
-                return {
-                    "status": "FAIL",
-                    "reason": f"Third-party watermark detected: {text}"
-                }
-    
-    return {
-        "status": "PASS",
-        "reason": "No third-party watermarks detected"
-    }
 
 
 # ==================== OPTIMIZED MAIN VALIDATOR WITH EARLY EXIT ====================
@@ -824,11 +727,7 @@ def stage2_validate_optimized(
                                      "ai_generated", "watermark"]
         return results
 
-    # 3. PII CHECK (CRITICAL)
-    print("[P1] Checking for PII...")
-    results["checks"]["text_pii"] = check_text_and_pii(image_path)
-    results["checks_performed"].append("text_pii")
-
+    
     # Exit immediately only on FAIL, continue on REVIEW
     if results["checks"]["text_pii"]["status"] == "FAIL":
         results["final_decision"] = "REJECT"
@@ -911,9 +810,6 @@ def stage2_validate_optimized(
     results["checks"]["ai_generated"] = detect_ai_generated(image_path)
     results["checks_performed"].append("ai_generated")
     
-    # 12. Watermark
-    results["checks"]["watermark"] = detect_watermark(image_path)
-    results["checks_performed"].append("watermark")
     
     # ============= FINAL DECISION LOGIC =============
     

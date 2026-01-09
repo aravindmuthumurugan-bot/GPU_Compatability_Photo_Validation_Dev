@@ -1,0 +1,30 @@
+# Core dependencies with GPU support
+# TensorFlow with CUDA 12.0 support
+tensorflow[and-cuda]==2.16.1
+
+# DeepFace and dependencies
+deepface==0.0.93
+retina-face==0.0.17
+
+# OCR with GPU support
+easyocr==1.7.1
+torch==2.2.0+cu121
+torchvision==0.17.0+cu121
+
+# Computer Vision
+opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
+
+# API Framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Utilities
+numpy==1.26.4
+Pillow==10.2.0
+gdown==5.1.0
+
+# Additional dependencies
+mtcnn==0.1.1
+```

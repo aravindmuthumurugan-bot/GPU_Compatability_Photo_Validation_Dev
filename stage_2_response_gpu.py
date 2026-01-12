@@ -706,7 +706,7 @@ def stage2_validate_optimized(
         results["action"] = "SUSPEND_PROFILE"
         results["reason"] = "Underage detected - immediate suspension"
         results["early_exit"] = True
-        results["checks_skipped"] = ["fraud_db", "text_pii", "gender", "ethnicity", "celebrity_db",
+        results["checks_skipped"] = ["fraud_db", "gender", "ethnicity", "celebrity_db",
                                      "face_coverage", "duplicate", "enhancement", "photo_of_photo",
                                      "ai_generated", "watermark"]
         return results
@@ -722,21 +722,12 @@ def stage2_validate_optimized(
         results["action"] = "SUSPEND_PROFILE"
         results["reason"] = "Fraud database match - immediate suspension"
         results["early_exit"] = True
-        results["checks_skipped"] = ["text_pii", "gender", "ethnicity", "celebrity_db",
+        results["checks_skipped"] = [ "gender", "ethnicity", "celebrity_db",
                                      "face_coverage", "duplicate", "enhancement", "photo_of_photo",
                                      "ai_generated", "watermark"]
         return results
 
     
-    # Exit immediately only on FAIL, continue on REVIEW
-    if results["checks"]["text_pii"]["status"] == "FAIL":
-        results["final_decision"] = "REJECT"
-        results["action"] = "WARN_AND_SELFIE_VERIFY"
-        results["reason"] = "PII detected in photo"
-        results["early_exit"] = True
-        results["checks_skipped"] = ["gender", "ethnicity", "celebrity_db", "face_coverage",
-                                     "duplicate", "enhancement", "photo_of_photo", "ai_generated", "watermark"]
-        return results
 
     # ============= PRIORITY 2: HIGH IMPORTANCE CHECKS (EARLY EXIT ON FAIL ONLY) =============
 
@@ -851,8 +842,6 @@ def determine_rejection_action(fail_checks: List[str], all_checks: Dict) -> str:
     if any(check in fail_checks for check in ["age", "fraud_db"]):
         return "SUSPEND_PROFILE"
     
-    if "text_pii" in fail_checks:
-        return "WARN_AND_SELFIE_VERIFY"
     
     if any(check in fail_checks for check in ["celebrity_db", "gender", "ethnicity"]):
         return "SELFIE_VERIFICATION"
